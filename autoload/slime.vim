@@ -78,8 +78,6 @@ function! s:TmuxCommand(config, args)
 endfunction
 
 function! s:TmuxSend(config, text)
-  call s:WritePasteFile(a:text)
-  call s:TmuxCommand(a:config, "load-buffer " . g:slime_paste_file)
   if exists("b:slime_bracketed_paste")
     let bracketed_paste = b:slime_bracketed_paste
   elseif exists("g:slime_bracketed_paste")
@@ -87,8 +85,23 @@ function! s:TmuxSend(config, text)
   else
     let bracketed_paste = 0
   endif
+
+  let [text_to_paste, has_crlf] = [a:text, 0]
+  if bracketed_paste
+    if a:text[-2:] == "\r\n"
+      let [text_to_paste, has_crlf] = [a:text[:-3], 1]
+    elseif a:text[-1:] == "\r" || a:text[-1:] == "\n"
+      let [text_to_paste, has_crlf] = [a:text[:-2], 1]
+    endif
+  endif
+
+  call s:WritePasteFile(text_to_paste)
+  call s:TmuxCommand(a:config, "load-buffer " . g:slime_paste_file)
   if bracketed_paste
     call s:TmuxCommand(a:config, "paste-buffer -d -p -t " . shellescape(a:config["target_pane"]))
+    if has_crlf
+      call s:TmuxCommand(a:config, "send-keys -t " . shellescape(a:config["target_pane"]) . " Enter")
+    end
   else
     call s:TmuxCommand(a:config, "paste-buffer -d -t " . shellescape(a:config["target_pane"]))
   end
@@ -218,13 +231,15 @@ function! s:VimterminalConfig() abort
         \ : 1
   if choice > 0
     if choice>len(terms)
-      if !exists("g:slime_vimterminal_cmd")
-          let cmd = input("Enter a command to run [".&shell."]:")
-          if len(cmd)==0
-            let cmd = &shell
-          endif
+      if exists("b:slime_vimterminal_cmd")
+        let cmd = b:slime_vimterminal_cmd
+      elseif exists("g:slime_vimterminal_cmd")
+        let cmd = g:slime_vimterminal_cmd
       else
-          let cmd = g:slime_vimterminal_cmd
+        let cmd = input("Enter a command to run [".&shell."]:")
+        if len(cmd)==0
+          let cmd = &shell
+        endif
       endif
       let winid = win_getid()
       if exists("g:slime_vimterminal_config")
@@ -279,8 +294,14 @@ function! s:SID()
 endfun
 
 function! s:WritePasteFile(text)
-  " could check exists("*writefile")
-  call system("cat > " . g:slime_paste_file, a:text)
+  let paste_dir = fnamemodify(g:slime_paste_file, ":p:h")
+  if !isdirectory(paste_dir)
+    call mkdir(paste_dir, "p")
+  endif
+  let output = system("cat > " . g:slime_paste_file, a:text)
+  if v:shell_error
+    echoerr output
+  endif
 endfunction
 
 function! s:_EscapeText(text)
